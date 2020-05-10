@@ -15,13 +15,18 @@
 
 import re
 import sqlite3
-import logging
+
 import os
 import argparse
 import sys
 import csv
 from pyedgar.utilities.indices import IndexMaker
 from os import path
+import psycopg2
+from psycopg2.errors import DuplicateDatabase, DuplicateTable
+from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+import logging
+logging.basicConfig(level=logging.DEBUG)
 
 
 __author__ = "Michael Hay"
@@ -44,6 +49,75 @@ PATH = "./"
 CACHE_CONTROL = '.cache_exists'
 DB_CONTROL = '.db_exists'
 DB_CACHE = 'edgar_cache.db'
+
+
+def create_postgres_db_connection(host, user, password, database=None):
+    conn = psycopg2.connect(host=host, database=database, user=user, password=password)
+    conn.set_session(autocommit=True)
+    cur = conn.cursor()
+    return conn, cur
+
+
+def get_postgres_dbs(conn, cur):
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    cur.execute("""SELECT datname from pg_database""")
+    rows = cur.fetchall()
+    return {'dbnames':[x[0] for x in rows]}
+
+
+def get_postgres_tables(conn, cur):
+    cur.execute("""SELECT table_name FROM information_schema.tables
+           WHERE table_schema = 'public'""")
+    dsn_params = conn.get_dsn_parameters()
+    return {'dbname':dsn_params['dbname'],'tables':[table[0] for table in cur.fetchall()]}
+
+
+def create_postgres_db(conn, cur, db_name):
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    command = f'create database {db_name};'
+    try:
+        cur.execute(command)
+    except DuplicateDatabase as dd:
+        logging.warning(dd)
+
+
+def run_postgres_commands(conn, cur, commands):
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    for command in commands:
+        cur.execute(command)
+
+
+def select_from_postgres_table(conn, cur, commands):
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    for command in commands:
+        cur.execute(command)
+    return cur.fetchall()
+
+
+def create_postgres_table(conn, cur, commands):
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    for command in commands:
+        try:
+            cur.execute(command)
+        except DuplicateTable as dt:
+            logging.warning(dt)
+
+
+def load_companies_postgres(conn, cur, companies):
+    num = len(companies)
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    query = "INSERT INTO companies (cik, name, year, month, day, accession, form) VALUES (%s, %s, %s, %s, %s, %s, %s)"
+    cur.executemany(query, companies)
+    return num
+
+
+def get_postgres_connection_params(conn):
+    return conn.get_dsn_parameters()
+
+
+def close_postgres_db(conn):
+    logging.info('Closing the connection to the database file.')
+    conn.close()
 
 
 def initialize(start_year=2010):

@@ -1,21 +1,18 @@
 #!/usr/bin/python3
-#  Copyright 2019 Cameron Solutions
-#  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
-#  in compliance with the License. You may obtain a copy of the License at
-#
-#  http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software distributed under the License
-#  is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
-#  or implied. See the License for the specific language governing permissions and limitations under
-#  the License.
-#
-#
+"""
+Copyright 2019 Cameron Solutions
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
+in compliance with the License. You may obtain a copy of the License at
 
+http://www.apache.org/licenses/LICENSE-2.0
 
+Unless required by applicable law or agreed to in writing, software distributed under the License
+is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
+or implied. See the License for the specific language governing permissions and limitations under
+the License.
+"""
 import re
 import sqlite3
-
 import os
 import argparse
 import sys
@@ -23,7 +20,7 @@ import csv
 from pyedgar.utilities.indices import IndexMaker
 from os import path
 import psycopg2
-from psycopg2.errors import DuplicateDatabase, DuplicateTable
+from psycopg2.errors import (DuplicateDatabase, DuplicateTable, DatabaseError)
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 import logging
 logging.basicConfig(level=logging.DEBUG)
@@ -52,6 +49,14 @@ DB_CACHE = 'edgar_cache.db'
 
 
 def create_postgres_db_connection(host, user, password, database=None):
+    """
+    Create and return a postgres connection and cursor
+    :param host: hostname of postgres server
+    :param user: username for postgres: 'postgres'
+    :param password: password for the postgres user
+    :param database: None or db name
+    :return: connection and cursor
+    """
     conn = psycopg2.connect(host=host, database=database, user=user, password=password)
     conn.set_session(autocommit=True)
     cur = conn.cursor()
@@ -59,20 +64,39 @@ def create_postgres_db_connection(host, user, password, database=None):
 
 
 def get_postgres_dbs(conn, cur):
+    """
+    Get a json/dictionary with a list of postgres database names
+    :param conn: a postgres connection object
+    :param cur: a postgres cursor object
+    :return: a json/dictionary with a list of the postgres db names
+    """
     conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
     cur.execute("""SELECT datname from pg_database""")
     rows = cur.fetchall()
-    return {'dbnames':[x[0] for x in rows]}
+    return {'dbnames': [x[0] for x in rows]}
 
 
 def get_postgres_tables(conn, cur):
+    """
+    Return a json/dictionary object containing the db name and a list of the tables
+    :param conn: a postgres connection object
+    :param cur: a postgres cursor object
+    :return: a json/dictionary object containing the db name and a list of the tables
+    """
     cur.execute("""SELECT table_name FROM information_schema.tables
            WHERE table_schema = 'public'""")
     dsn_params = conn.get_dsn_parameters()
-    return {'dbname':dsn_params['dbname'],'tables':[table[0] for table in cur.fetchall()]}
+    return {'dbname': dsn_params['dbname'], 'tables': [table[0] for table in cur.fetchall()]}
 
 
 def create_postgres_db(conn, cur, db_name):
+    """
+    Create a new postgres database
+    :param conn: a postgres connection object
+    :param cur: a postgres cursor object
+    :param db_name: the name of the new database
+    :return: None
+    """
     conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
     command = f'create database {db_name};'
     try:
@@ -82,12 +106,30 @@ def create_postgres_db(conn, cur, db_name):
 
 
 def run_postgres_commands(conn, cur, commands):
+    """
+    Run an arbitrary database command(s). Commands must be triple quotes and in tuple form.
+    Example: commands = ('''SELECT * from companies''','''SELECT name, accession, form from companies''',)
+    :param conn: a postgres connection object
+    :param cur: a postgres cursor object
+    :param commands: A tuple of triple quoted db commands
+    :return: None
+    """
     conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
     for command in commands:
         cur.execute(command)
 
 
 def select_from_postgres_table(conn, cur, commands):
+    """
+    Note: This function and the run_postgres_commands should really be combined
+    Run SELECT Commands:Commands must be triple quotes and in tuple form.
+    Example: commands = ('''SELECT * from companies''','''SELECT name, accession, form from companies''',)
+    :param conn: a postgres connection object
+    :param cur: a postgres cursor object
+    :param commands: A tuple of triple quoted db commands
+    :return: a list of tuples representing the db rows. Output can easily be pulled into Pandas.
+    """
+    # TODO: Think about how to combine this and run_postgres_commands into a single function
     conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
     for command in commands:
         cur.execute(command)
@@ -95,6 +137,26 @@ def select_from_postgres_table(conn, cur, commands):
 
 
 def create_postgres_table(conn, cur, commands):
+    """
+    Create a table in a postgres database based on a set of commands of the form
+    commands = (
+        '''
+        CREATE TABLE companies (
+                cik INTEGER,
+                name TEXT,
+                year INTEGER,
+                month INTEGER,
+                day INTEGER,
+                accession TEXT,
+                form TEXT
+        )
+        ''',
+    )
+    :param conn: a postgres connection object
+    :param cur: a postgres cursor object
+    :param commands:
+    :return: None
+    """
     conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
     for command in commands:
         try:
@@ -104,18 +166,44 @@ def create_postgres_table(conn, cur, commands):
 
 
 def load_companies_postgres(conn, cur, companies):
-    num = len(companies)
+    """
+    Load company data into a postgres db table
+    Example:
+    companies = (
+        (1, 'Audi', 2000, 1, 1, 'accession text', 'form text'),
+        (2, 'Mercedes', 2001, 2, 2, 'accession text', 'form text'),
+        (3, 'Skoda', 2002, 3, 3, 'accession text', 'form text'),
+        (4, 'Volvo', 2003, 4, 4, 'accession text', 'form text'),
+        (5, 'Bentley', 2004, 5, 5, 'accession text', 'form text'),
+        (6, 'Citroen', 2005, 6, 6, 'accession text', 'form text'),
+        (7, 'Hummer', 2006, 7, 7, 'accession text', 'form text'),
+        (8, 'Volkswagen', 2007, 8, 8, 'accession text', 'form text')
+    )
+    :param conn: a postgres connection object
+    :param cur: a postgres cursor object
+    :param companies: a set of tuples containing company data
+    :return: None
+    """
     conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
     query = "INSERT INTO companies (cik, name, year, month, day, accession, form) VALUES (%s, %s, %s, %s, %s, %s, %s)"
     cur.executemany(query, companies)
-    return num
 
 
 def get_postgres_connection_params(conn):
+    """
+    Get the postgres dsn connection parameters
+    :param conn: a postgres connection object
+    :return: a json/dictionary containing the dsn connection parameters
+    """
     return conn.get_dsn_parameters()
 
 
 def close_postgres_db(conn):
+    """
+    Close the postgres db connection
+    :param conn: a postgres connection object
+    :return: None
+    """
     logging.info('Closing the connection to the database file.')
     conn.close()
 
@@ -129,7 +217,6 @@ def initialize(start_year=2010):
     :type start_year: int
     ;param start_year: define the start year for the initialization of the cache
     """
-
     if path.exists(PATH + CACHE_CONTROL):
         return True, "Cache already exists, will not fetch cache files"
     else:
@@ -176,7 +263,7 @@ def build_idx(file_name):
     logger.info('Creating the data structure from the compressed index file.')
     header_re = re.compile('^cik', re.IGNORECASE)  # Detect the headers for the idx
     idx = list()
-    num = 0
+    # num = 0 # this is not used. Safe to delete?
     with open(file_name, newline='') as content:
         csv_reader = csv.reader(content, delimiter='\t')
         for entry in csv_reader:

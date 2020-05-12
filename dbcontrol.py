@@ -23,7 +23,7 @@ import psycopg2
 from psycopg2.errors import (DuplicateDatabase, DuplicateTable, DatabaseError)
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 import logging
-logging.basicConfig(level=logging.DEBUG)
+# logging.basicConfig(level=logging.DEBUG)
 
 
 __author__ = "Michael Hay"
